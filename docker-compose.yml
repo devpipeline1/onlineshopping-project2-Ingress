@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: shop
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: workshop-change-me
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopuser -d shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  product-api:
+    build: ./product-api
+    image: workshop-product-api:2.0
+    environment:
+      PORT: "5001"
+      DATABASE_URL: postgresql://shopuser:workshop-change-me@postgres:5432/shop
+    expose:
+      - "5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order-api:
+    build: ./order-api
+    image: workshop-order-api:2.0
+    environment:
+      PORT: "5002"
+      DATABASE_URL: postgresql://shopuser:workshop-change-me@postgres:5432/shop
+    expose:
+      - "5002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    image: workshop-frontend:3.0
+    environment:
+      PRODUCT_API_HOST: product-api
+      ORDER_API_HOST: order-api
+      NGINX_ENVSUBST_FILTER: "PRODUCT_API_HOST|ORDER_API_HOST"
+    ports:
+      - "8080:80"
+    depends_on:
+      - product-api
+      - order-api
+
+volumes:
+  postgres-data:

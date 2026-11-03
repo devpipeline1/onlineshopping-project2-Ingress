@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kubernetes Microservices Shop</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 18px; background: #f6f8fb; color: #172033; }
+    h1 { margin-bottom: 6px; }
+    .sub { color: #53627a; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-top: 22px; }
+    section { background: white; border: 1px solid #dce3ed; border-radius: 12px; padding: 18px; }
+    input { width: 100%; padding: 10px; margin: 5px 0 12px; border: 1px solid #cbd5e1; border-radius: 7px; }
+    button { border: 0; border-radius: 8px; padding: 9px 12px; background: #2056a8; color: white; cursor: pointer; margin: 3px; }
+    button.secondary { background: #64748b; }
+    button.danger { background: #b42318; }
+    .product { border: 1px solid #e2e8f0; border-radius: 9px; padding: 12px; margin: 10px 0; }
+    .product h3 { margin: 0 0 5px; }
+    .muted { color: #64748b; font-size: 13px; }
+    .pill { display: inline-block; background: #e2f4e8; color: #176b35; border-radius: 999px; padding: 4px 9px; font-size: 12px; }
+    #status { min-height: 22px; color: #176b35; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f0f3f8; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Kubernetes Microservices Shop</h1>
+  <p class="sub">Live product catalogue with Create, Read, Update and Delete operations.</p>
+  <p><span class="pill">Frontend</span> <span class="pill">Product API</span> <span class="pill">Order API</span> <span class="pill">PostgreSQL</span></p>
+  <p id="status" role="status">Connecting to Product API...</p>
+  <div class="grid">
+    <section>
+      <h2>Product catalogue</h2>
+      <p class="muted">Automatically refreshes every 5 seconds. Changes are saved in PostgreSQL.</p>
+      <button onclick="loadProducts()">Refresh now</button>
+      <div id="products">Loading products...</div>
+    </section>
+    <section>
+      <h2 id="form-title">Add a product</h2>
+      <form id="product-form">
+        <input type="hidden" id="product-id">
+        <label for="name">Product name</label><input id="name" required maxlength="120" placeholder="e.g. Monitor">
+        <label for="description">Description</label><input id="description" placeholder="Product description">
+        <label for="price">Price</label><input id="price" type="number" min="0" step="0.01" required placeholder="e.g. 12500">
+        <label for="stock">Stock quantity</label><input id="stock" type="number" min="0" step="1" required value="0">
+        <button type="submit">Save product</button>
+        <button type="button" class="secondary" onclick="resetForm()">Clear</button>
+      </form>
+      <hr>
+      <h2>Place an order</h2>
+      <label for="customer-name">Customer name</label>
+      <input id="customer-name" maxlength="120" placeholder="e.g. Asha" value="Workshop Customer">
+      <p class="muted">Click Order on a product and enter a quantity. Stock is reduced automatically.</p>
+      <hr>
+      <h2>Order list</h2>
+      <button onclick="loadOrders()">Refresh orders</button>
+      <div id="orders">Loading orders...</div>
+    </section>
+  </div>
+  <script>
+    const productsElement = document.getElementById('products');
+    const statusElement = document.getElementById('status');
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+
+    // ALB Ingress routes /product to Product API and /order to Order API.
+    // The same paths are proxied by Nginx when running with Docker Compose.
+    function apiUrl(path) {
+      if (path === 'products' || path.startsWith('products/')) {
+        return `/product${path.slice('products'.length)}`;
+      }
+      if (path === 'orders' || path.startsWith('orders/')) {
+        return `/order${path.slice('orders'.length)}`;
+      }
+      throw new Error(`Unknown API route: ${path}`);
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(apiUrl(path), {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+
+    async function loadProducts() {
+      try {
+        const data = await api('products');
+        productsElement.innerHTML = data.products.map(p => `
+          <article class="product">
+            <h3>${escapeHtml(p.name)}</h3>
+            <div>${escapeHtml(p.description)}</div>
+            <p><strong>₹${Number(p.price).toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong> · Stock: ${p.stock}</p>
+            <p class="muted">Product ID: ${p.id}</p>
+            <button onclick="placeOrder(${p.id})" ${p.stock < 1 ? 'disabled' : ''}>Order</button>
+            <button onclick="editProduct(${p.id})">Edit</button>
+            <button class="danger" onclick="deleteProduct(${p.id})">Delete</button>
+          </article>`).join('') || '<p>No products yet. Add your first product.</p>';
+        statusElement.textContent = `Live · ${data.products.length} products · Last checked ${new Date().toLocaleTimeString()}`;
+      } catch (error) {
+        statusElement.textContent = `Product API error: ${error.message}`;
+      }
+    }
+
+    document.getElementById('product-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const id = document.getElementById('product-id').value;
+      const payload = {
+        name: document.getElementById('name').value.trim(),
+        description: document.getElementById('description').value.trim(),
+        price: Number(document.getElementById('price').value),
+        stock: Number(document.getElementById('stock').value)
+      };
+      try {
+        await api(id ? `products/${id}` : 'products', {
+          method: id ? 'PUT' : 'POST', body: JSON.stringify(payload)
+        });
+        statusElement.textContent = id ? 'Product updated successfully.' : 'Product created successfully.';
+        resetForm();
+        await loadProducts();
+      } catch (error) { statusElement.textContent = `Save failed: ${error.message}`; }
+    });
+
+    async function editProduct(id) {
+      try {
+        const data = await api('products');
+        const p = data.products.find(item => item.id === id);
+        if (!p) return;
+        document.getElementById('product-id').value = p.id;
+        document.getElementById('name').value = p.name;
+        document.getElementById('description').value = p.description;
+        document.getElementById('price').value = p.price;
+        document.getElementById('stock').value = p.stock;
+        document.getElementById('form-title').textContent = `Edit product #${p.id}`;
+        document.getElementById('name').focus();
+      } catch (error) { statusElement.textContent = error.message; }
+    }
+
+    async function deleteProduct(id) {
+      if (!confirm(`Delete product #${id}?`)) return;
+      try {
+        await api(`products/${id}`, { method: 'DELETE' });
+        statusElement.textContent = 'Product deleted.';
+        await loadProducts();
+      } catch (error) { statusElement.textContent = `Delete failed: ${error.message}`; }
+    }
+
+    function resetForm() {
+      document.getElementById('product-form').reset();
+      document.getElementById('product-id').value = '';
+      document.getElementById('form-title').textContent = 'Add a product';
+      document.getElementById('stock').value = 0;
+    }
+
+    async function placeOrder(productId) {
+      const data = await api('products');
+      const product = data.products.find(p => p.id === productId);
+      if (!product) { statusElement.textContent = 'Product not found. Refresh the catalogue.'; return; }
+      const customerName = document.getElementById('customer-name').value.trim();
+      if (!customerName) { statusElement.textContent = 'Enter a customer name first.'; return; }
+      const answer = prompt(`Quantity for ${product.name}? Available stock: ${product.stock}`, '1');
+      if (answer === null) return;
+      const quantity = Number(answer);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        statusElement.textContent = 'Quantity must be a positive whole number.'; return;
+      }
+      try {
+        const result = await api('orders', { method: 'POST', body: JSON.stringify({
+          customer_name: customerName, product_id: productId, quantity
+        })});
+        statusElement.textContent = `${result.message}: ${result.order.order_id}`;
+        await Promise.all([loadProducts(), loadOrders()]);
+      } catch (error) { statusElement.textContent = `Order failed: ${error.message}`; }
+    }
+
+    async function loadOrders() {
+      const output = document.getElementById('orders');
+      try {
+        const data = await api('orders');
+        if (!data.orders.length) { output.innerHTML = '<p>No orders yet. Click Order on a product.</p>'; return; }
+        output.innerHTML = data.orders.map(order => `
+          <article class="product">
+            <h3>${escapeHtml(order.order_id)} · ${escapeHtml(order.status)}</h3>
+            <p><strong>Customer:</strong> ${escapeHtml(order.customer_name)}</p>
+            <p class="muted">${new Date(order.created_at).toLocaleString()}</p>
+            ${order.items.map(item => `<p>${escapeHtml(item.product_name)} × ${item.quantity} · ₹${Number(item.unit_price).toLocaleString('en-IN', {minimumFractionDigits: 2})} each</p>`).join('')}
+            <p><strong>Total: ₹${Number(order.total).toLocaleString('en-IN', {minimumFractionDigits: 2})}</strong></p>
+          </article>`).join('');
+      } catch (error) { output.textContent = `Order API error: ${error.message}`; }
+    }
+
+    loadProducts();
+    loadOrders();
+    setInterval(loadProducts, 5000);
+    setInterval(loadOrders, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Local Docker Compose routing. In EKS, the ALB sends these paths
+    # directly to the corresponding API Services instead.
+    location = /product {
+        proxy_pass http://${PRODUCT_API_HOST}:5001/product;
+    }
+    location ^~ /product/ {
+        proxy_pass http://${PRODUCT_API_HOST}:5001;
+    }
+    location = /order {
+        proxy_pass http://${ORDER_API_HOST}:5002/order;
+    }
+    location ^~ /order/ {
+        proxy_pass http://${ORDER_API_HOST}:5002;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
